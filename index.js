@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { Client } from "discord.js-selfbot-v13";
 import { GoogleGenAI } from "@google/genai";
+const keep_alive = require('./keep_alive.js');
 
 // ------------------- CONFIG -------------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
