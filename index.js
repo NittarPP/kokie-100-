@@ -21,7 +21,7 @@ const memory = new Map();
 // Get memory for user, initializing with persona if empty
 function getUserMemory(userId) {
   if (!memory.has(userId)) {
-    memory.set(userId, [`Kokie persona: ${persona.trim()}`]);
+    memory.set(userId, [`you persona: ${persona.trim()}`]);
   }
   return memory.get(userId);
 }
@@ -49,7 +49,7 @@ async function askGemini(userId, userMessage) {
         temperature: 0.9,
         topK: 1,
         topP: 1,
-        maxOutputTokens: 50,
+        maxOutputTokens: 15,
       },
     });
 
@@ -80,7 +80,7 @@ client.on("messageCreate", async (message) => {
     const reply = await askGemini(message.author.id, message.content);
 
     // Save Kokie's reply
-    addToMemory(message.author.id, "Kokie: " + reply);
+    addToMemory(message.author.id, "you: " + reply);
 
     // Split long replies into Discord-friendly chunks
     const chunks = reply.match(/[\s\S]{1,2000}/g);
