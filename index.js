@@ -18,21 +18,20 @@ Always stay playful and gentle, but not overly talkative.
 // ------------------- MEMORY -------------------
 const memory = new Map();
 
-// Get memory for user, initializing with persona if empty
+// Initialize memory for a user
 function getUserMemory(userId) {
   if (!memory.has(userId)) {
-    memory.set(userId, { persona: persona.trim(), userMsgs: [] });
+    memory.set(userId, { persona: persona.trim(), userMsgs: [], lastReply: "" });
   }
   return memory.get(userId);
 }
 
-function addToMemory(userId, msg, isUser = true) {
+// Only save user messages
+function addToMemory(userId, msg) {
   const mem = getUserMemory(userId);
-  if (isUser) {
-    mem.userMsgs.push(msg);
-    const MAX_MEMORY = 10;
-    if (mem.userMsgs.length > MAX_MEMORY) mem.userMsgs.shift(); // remove oldest
-  }
+  mem.userMsgs.push(msg);
+  const MAX_MEMORY = 5; // Number of recent messages to remember
+  if (mem.userMsgs.length > MAX_MEMORY) mem.userMsgs.shift(); // Remove oldest
 }
 
 // ------------------- GEMINI -------------------
@@ -40,11 +39,13 @@ async function askGemini(userId, userMessage) {
   try {
     const mem = getUserMemory(userId);
     const context = mem.persona + "\nRecent messages:\n" + mem.userMsgs.join("\n");
+
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: context + "\n\nUser says: " + userMessage,
       generationConfig: { temperature: 0.9, topK: 1, topP: 1, maxOutputTokens: 50 },
     });
+
     return response.text || "Kokie is confused~";
   } catch (err) {
     console.error("Gemini API Error:", err);
@@ -60,18 +61,18 @@ client.on("ready", () => {
 client.on("messageCreate", async (message) => {
   if (message.author.id === client.user.id) return;
   if (!(message.channel.type === "DM" || message.channel.type === "GROUP_DM")) return;
+  if (!message.content || message.content.length > 50) return;
 
   try {
-    if (message.content.length > 50) return;
-
-    // Save user message
-    addToMemory(message.author.id, "User: " + message.content);
-
+    const userId = message.author.id;  
     await message.channel.sendTyping();
-    const reply = await askGemini(message.author.id, message.content);
+    const reply = await askGemini(userId, message.content);
 
-    // Save Kokie's reply
-    addToMemory(message.author.id, "you: " + reply);
+    // Prevent sending the same message twice
+    const mem = getUserMemory(userId);
+    if (reply === mem.lastReply) return;
+    mem.lastReply = reply;
+    addToMemory(userId, `${client.user.username} says: ${reply}`);
 
     // Split long replies into Discord-friendly chunks
     const chunks = reply.match(/[\s\S]{1,2000}/g);
@@ -85,4 +86,4 @@ client.on("messageCreate", async (message) => {
 });
 
 // ------------------- LOGIN -------------------
-client.login(process.env.DISCORD_USER_TOKEN)
+client.login(process.env.DISCORD_USER_TOKEN);
