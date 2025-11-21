@@ -21,40 +21,31 @@ const memory = new Map();
 // Get memory for user, initializing with persona if empty
 function getUserMemory(userId) {
   if (!memory.has(userId)) {
-    memory.set(userId, [`you persona: ${persona.trim()}`]);
+    memory.set(userId, { persona: persona.trim(), userMsgs: [] });
   }
   return memory.get(userId);
 }
 
-// Add message to memory, automatically forgetting old messages
-function addToMemory(userId, msg) {
+function addToMemory(userId, msg, isUser = true) {
   const mem = getUserMemory(userId);
-  mem.push(msg);
-
-  const MAX_MEMORY = 10; // max number of messages remembered
-  if (mem.length > MAX_MEMORY + 1) { // +1 for persona
-    mem.splice(1, mem.length - MAX_MEMORY - 1); // keep persona at index 0
+  if (isUser) {
+    mem.userMsgs.push(msg);
+    const MAX_MEMORY = 10;
+    if (mem.userMsgs.length > MAX_MEMORY) mem.userMsgs.shift(); // remove oldest
   }
 }
 
 // ------------------- GEMINI -------------------
 async function askGemini(userId, userMessage) {
   try {
-    const userMem = getUserMemory(userId).join("\n");
-
+    const mem = getUserMemory(userId);
+    const context = mem.persona + "\nRecent messages:\n" + mem.userMsgs.join("\n");
     const response = await ai.models.generateContent({
       model: MODEL,
-      contents: userMem + "\n\nUser says: " + userMessage,
-      generationConfig: {
-        temperature: 0.9,
-        topK: 1,
-        topP: 1,
-        maxOutputTokens: 15,
-      },
+      contents: context + "\n\nUser says: " + userMessage,
+      generationConfig: { temperature: 0.9, topK: 1, topP: 1, maxOutputTokens: 50 },
     });
-
     return response.text || "Kokie is confused~";
-
   } catch (err) {
     console.error("Gemini API Error:", err);
     return "Kokie fell asleep…";
@@ -94,4 +85,4 @@ client.on("messageCreate", async (message) => {
 });
 
 // ------------------- LOGIN -------------------
-client.login(process.env.DISCORD_USER_TOKEN);
+client.login(process.env.DISCORD_USER_TOKEN)
