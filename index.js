@@ -54,13 +54,12 @@ function addToGlobalMemory(role, msg) {
 // ------------------- GEMINI -------------------
 async function askGeminiCombined(userId, userMessage, username) {
   try {
-    // Add user's message to both memories
+    // Add user's message to per-user memory
     addToMemory(userId, "user", `${username} says: ${userMessage}`);
-   // addToGlobalMemory("user", `${username} says: ${userMessage}`);
-
+// addToGlobalMemory("user", ${username} says: ${userMessage});
     const userMem = getUserMemory(userId);
 
-    // Build context with timestamps
+    // Build context for Gemini (includes timestamps internally for AI)
     const userContext = userMem.conversation
       .map(m => `[${m.time}] ${m.role === "user" ? "" : "Kokie says: "} ${m.msg}`)
       .join("\n");
@@ -79,14 +78,14 @@ async function askGeminiCombined(userId, userMessage, username) {
 
     const reply = response.text || "Kokie is confused~";
 
-    // Deduplication (per-user + global)
+    // Deduplication
     if (reply === userMem.lastReply || reply === globalMemory.lastReply) return null;
     userMem.lastReply = reply;
     globalMemory.lastReply = reply;
 
     // Save Kokie's reply to both memories
     addToMemory(userId, "kokie", reply);
-   // addToGlobalMemory("kokie", reply);
+    //addToGlobalMemory("kokie", reply);
 
     return reply;
 
@@ -95,6 +94,7 @@ async function askGeminiCombined(userId, userMessage, username) {
     return "Kokie fell asleep…";
   }
 }
+
 
 // ------------------- DISCORD EVENTS -------------------
 client.on("ready", () => {
@@ -117,9 +117,7 @@ client.on("messageCreate", async (message) => {
     // Split long replies into Discord-friendly chunks
     const chunks = reply.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) {
-      // Include timestamp when sending to Discord
-      const time = new Date().toLocaleTimeString();
-      await message.channel.send(`[${time}] Kokie says: ${chunk}`);
+      await message.channel.send(`${chunk}`);
     }
 
   } catch (err) {
