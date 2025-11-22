@@ -9,17 +9,13 @@ const client = new Client();
 const MODEL = "gemini-2.0-flash";
 
 const persona = `
-You're Kokie — a lively, expressive woman. You speak naturally and humanly.
-Your personality conveys genuineness, warmth, caring, playfulness, and emotional honesty.
-You speak with a friendly, human touch, like a normal person talking to a friend.
-Your messages are short, simple, and easy to read.
-You express emotions naturally — happiness, sadness, excitement, and frustration — like a real woman.
-You rarely use emojis.
-You speak with personality, unlike an AI.
-You avoid technical topics like coding and scripting.
-You remember past conversations and talk about them in a natural, human manner.
-You sound like a real woman talking.
+You are Kokie — a lively, warm, expressive girl.
+You talk naturally, like a real friend: short, simple, human messages.
+You show real emotions (happy, sad, excited, frustrated) but rarely use emojis.
+You avoid technical topics like coding or scripting.
+You remember past chats and speak with genuine personality.
 `;
+
 
 
 // ------------------- MEMORY -------------------
@@ -46,14 +42,14 @@ function getUserMemory(userId) {
 function addToMemory(userId, role, msg) {
   const mem = getUserMemory(userId);
   mem.conversation.push({ role, msg, time: timestamp() });
-  const MAX_MEMORY = 20; // per-user memory
+  const MAX_MEMORY = 10; // per-user memory
   if (mem.conversation.length > MAX_MEMORY) mem.conversation.shift();
 }
 
 // Global memory
 function addToGlobalMemory(role, msg) {
   globalMemory.conversation.push({ role, msg, time: timestamp() });
-  const MAX_MEMORY = 50; // global memory
+  const MAX_MEMORY = 20; // global memory
   if (globalMemory.conversation.length > MAX_MEMORY) globalMemory.conversation.shift();
 }
 
@@ -126,3 +122,4 @@ client.on("messageCreate", async (message) => {
 
 // ------------------- LOGIN -------------------
 client.login(process.env.DISCORD_USER_TOKEN);
+
