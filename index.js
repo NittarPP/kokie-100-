@@ -60,21 +60,15 @@ function addToGlobalMemory(role, msg) {
 // ------------------- GEMINI -------------------
 async function askGeminiCombined(userId, userMessage, username) {
   try {
-    // Add user's message to per-user memory
-    addToMemory(userId, "user", `${username} says: ${userMessage}`);
-// addToGlobalMemory("user", ${username} says: ${userMessage});
-    const userMem = getUserMemory(userId);
+    // Save user message into global memory
+    addToGlobalMemory("user", `${username} says: ${userMessage}`);
 
-    // Build context for Gemini (includes timestamps internally for AI)
-    const userContext = userMem.conversation
-      .map(m => `[${m.time}] ${m.role === "user" ? "" : "Kokie says: "} ${m.msg}`)
-      .join("\n");
-
+    // Build context from global memory only
     const globalContext = globalMemory.conversation
       .map(m => `[${m.time}] ${m.role === "user" ? "" : "Kokie says: "} ${m.msg}`)
       .join("\n");
 
-    const context = `${userMem.persona}\nRecent conversation with ${username}:\n${userContext}\n\nRecent global conversation:\n${globalContext}`;
+    const context = `${globalMemory.persona}\nRecent conversation:\n${globalContext}`;
 
     const response = await ai.models.generateContent({
       model: MODEL,
@@ -85,13 +79,11 @@ async function askGeminiCombined(userId, userMessage, username) {
     const reply = response.text || "Kokie is confused~";
 
     // Deduplication
-    if (reply === userMem.lastReply || reply === globalMemory.lastReply) return null;
-    userMem.lastReply = reply;
+    if (reply === globalMemory.lastReply) return null;
     globalMemory.lastReply = reply;
 
-    // Save Kokie's reply to both memories
-    addToMemory(userId, "kokie", reply);
-    //addToGlobalMemory("kokie", reply);
+    // Save Kokie's reply to global memory
+    addToGlobalMemory("kokie", reply);
 
     return reply;
 
@@ -100,6 +92,7 @@ async function askGeminiCombined(userId, userMessage, username) {
     return "Kokie fell asleep…";
   }
 }
+
 
 
 // ------------------- DISCORD EVENTS -------------------
