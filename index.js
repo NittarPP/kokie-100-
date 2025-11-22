@@ -17,37 +17,79 @@ Always stay playful and gentle, but not overly talkative.
 `;
 
 // ------------------- MEMORY -------------------
-const memory = new Map();
+const memory = new Map(); // per-user memory
+const globalMemory = {
+  persona: persona.trim(),
+  conversation: [], // last messages from all users and Kokie
+  lastReply: ""
+};
 
-// Initialize memory for a user
+// Helper: get current timestamp
+function timestamp() {
+  return new Date().toLocaleTimeString(); // e.g., "15:42:07"
+}
+
+// Per-user memory
 function getUserMemory(userId) {
   if (!memory.has(userId)) {
-    memory.set(userId, { persona: persona.trim(), userMsgs: [], lastReply: "" });
+    memory.set(userId, { persona: persona.trim(), conversation: [], lastReply: "" });
   }
   return memory.get(userId);
 }
 
-// Only save user messages
-function addToMemory(userId, msg) {
+function addToMemory(userId, role, msg) {
   const mem = getUserMemory(userId);
-  mem.userMsgs.push(msg);
-  const MAX_MEMORY = 5; // Number of recent messages to remember
-  if (mem.userMsgs.length > MAX_MEMORY) mem.userMsgs.shift(); // Remove oldest
+  mem.conversation.push({ role, msg, time: timestamp() });
+  const MAX_MEMORY = 20; // per-user memory
+  if (mem.conversation.length > MAX_MEMORY) mem.conversation.shift();
+}
+
+// Global memory
+function addToGlobalMemory(role, msg) {
+  globalMemory.conversation.push({ role, msg, time: timestamp() });
+  const MAX_MEMORY = 50; // global memory
+  if (globalMemory.conversation.length > MAX_MEMORY) globalMemory.conversation.shift();
 }
 
 // ------------------- GEMINI -------------------
-async function askGemini(userId, userMessage) {
+async function askGeminiCombined(userId, userMessage, username) {
   try {
-    const mem = getUserMemory(userId);
-    const context = mem.persona + "\nRecent messages:\n" + mem.userMsgs.join("\n");
+    // Add user's message to both memories
+    addToMemory(userId, "user", `${username} says: ${userMessage}`);
+   // addToGlobalMemory("user", `${username} says: ${userMessage}`);
+
+    const userMem = getUserMemory(userId);
+
+    // Build context with timestamps
+    const userContext = userMem.conversation
+      .map(m => `[${m.time}] ${m.role === "user" ? "" : "Kokie says: "} ${m.msg}`)
+      .join("\n");
+
+    const globalContext = globalMemory.conversation
+      .map(m => `[${m.time}] ${m.role === "user" ? "" : "Kokie says: "} ${m.msg}`)
+      .join("\n");
+
+    const context = `${userMem.persona}\nRecent conversation with ${username}:\n${userContext}\n\nRecent global conversation:\n${globalContext}`;
 
     const response = await ai.models.generateContent({
       model: MODEL,
-      contents: context + "\n\nUser says: " + userMessage,
+      contents: `${context}\nKokie, reply to ${username}:`,
       generationConfig: { temperature: 0.9, topK: 1, topP: 1, maxOutputTokens: 50 },
     });
 
-    return response.text || "Kokie is confused~";
+    const reply = response.text || "Kokie is confused~";
+
+    // Deduplication (per-user + global)
+    if (reply === userMem.lastReply || reply === globalMemory.lastReply) return null;
+    userMem.lastReply = reply;
+    globalMemory.lastReply = reply;
+
+    // Save Kokie's reply to both memories
+    addToMemory(userId, "kokie", reply);
+   // addToGlobalMemory("kokie", reply);
+
+    return reply;
+
   } catch (err) {
     console.error("Gemini API Error:", err);
     return "Kokie fell asleep…";
@@ -62,23 +104,22 @@ client.on("ready", () => {
 client.on("messageCreate", async (message) => {
   if (message.author.id === client.user.id) return;
   if (!(message.channel.type === "DM" || message.channel.type === "GROUP_DM")) return;
-  if (!message.content || message.content.length > 50) return;
+  if (!message.content || message.content.length > 500) return;
 
   try {
     const userId = message.author.id;  
-    await message.channel.sendTyping();
-    const reply = await askGemini(userId, message.content);
+    const username = message.author.globalName || message.author.username;
 
-    // Prevent sending the same message twice
-    const mem = getUserMemory(userId);
-    if (reply === mem.lastReply) return;
-    mem.lastReply = reply;
-    addToMemory(userId, `${client.user.username} says: ${reply}`);
+    await message.channel.sendTyping();
+    const reply = await askGeminiCombined(userId, message.content, username);
+    if (!reply) return; // skip if duplicate
 
     // Split long replies into Discord-friendly chunks
     const chunks = reply.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) {
-      await message.channel.send(chunk);
+      // Include timestamp when sending to Discord
+      const time = new Date().toLocaleTimeString();
+      await message.channel.send(`[${time}] Kokie says: ${chunk}`);
     }
 
   } catch (err) {
@@ -88,4 +129,3 @@ client.on("messageCreate", async (message) => {
 
 // ------------------- LOGIN -------------------
 client.login(process.env.DISCORD_USER_TOKEN);
-
