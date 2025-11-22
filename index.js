@@ -117,7 +117,7 @@ client.on("messageCreate", async (message) => {
     // Split long replies into Discord-friendly chunks
     const chunks = reply.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) {
-      await message.channel.send(`${chunk}`);
+      await message.channel.send(chunk);
     }
 
   } catch (err) {
