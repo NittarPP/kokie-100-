@@ -7,7 +7,7 @@ import keep_alive from './keep_alive.js'; // optional, keep if you have it
 // ------------------- CONFIG -------------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client();
-const MODEL = "gemini-2.0-flash-001";
+const MODEL = "gemini-2.5-flash-lite";
 
 // Default persona (trimmed into globalMemory on startup)
 const defaultPersona = `
@@ -138,16 +138,27 @@ function isCommand(msg, cmd) {
 }
 
 client.on("messageCreate", async (message) => {
-  if (message.author.id === client.user.id) return;
+  // Kokie should ONLY respond when you use ?t
+  if (message.author.id === client.user.id) {
+    if (!message.content.startsWith("?t ")) return;
+  }
 
-  // Only respond to DMs / Group DMs (as before)
+  // Only respond in DMs or Group DMs
   if (!(message.channel.type === "DM" || message.channel.type === "GROUP_DM")) return;
 
-  if (!message.content || message.content.length > 1200) return; // ignore extremely long messages
+  let text = message.content.trim();
+
+  // Remove ?t prefix so AI receives only your message
+  if (text.startsWith("?t ")) {
+    text = text.slice(3).trim();
+  }
+
+  if (!text || text.length > 1200) return;
 
   const userId = message.author.id;
   const username = message.author.globalName || message.author.username;
-  const text = message.content.trim();
+
+  // ----- COMMANDS -----
 
   if (isCommand(text, "?persona ")) {
     const newPersona = text.slice("?persona ".length).trim();
@@ -155,7 +166,6 @@ client.on("messageCreate", async (message) => {
       return message.channel.send("Persona too short.");
     }
     globalMemory.persona = newPersona;
-
     return message.channel.send("Kokie has updated her persona.");
   }
 
@@ -174,13 +184,13 @@ client.on("messageCreate", async (message) => {
     return message.channel.send("I forgot our recent conversation (for you).");
   }
 
+  // ----- AI REPLY -----
+
   try {
     await message.channel.sendTyping();
-
     const reply = await askGeminiCombined(userId, text, username);
-    if (!reply) return; // deduplicated
+    if (!reply) return;
 
-    // Send in chunks if too long
     const chunks = reply.match(/[\s\S]{1,2000}/g);
     for (const chunk of chunks) {
       await message.channel.send(chunk);
@@ -194,5 +204,3 @@ client.on("messageCreate", async (message) => {
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
-
-
