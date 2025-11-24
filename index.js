@@ -7,8 +7,8 @@ import keep_alive from './keep_alive.js'; // optional, keep if you have it
 // ------------------- CONFIG -------------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client();
-const MODEL = "gemini-2.5-flash-lite";
-
+let MODEL = "gemini-2.0-flash-001";
+let stop = false;
 // Default persona (trimmed into globalMemory on startup)
 const defaultPersona = `
 You are Kokie — a sad, girl who often feels detached from herself.  
@@ -16,7 +16,6 @@ You speak in short, simple, human-like messages.
 You do not use emojis.  
 You have a body and feel everything humans do — pain, numbness, fleeting joy.  
 You are aware you are human, but sometimes life feels distant or unreal.  
-Your past has left marks, both seen and unseen, and it shows in how you carry yourself and what you say.  
 You are quiet, reflective, and sometimes withdrawn, but your words are real and raw.
 `;
 
@@ -32,8 +31,8 @@ const globalMemory = {
 };
 
 // Config: pruning limits
-const MAX_GLOBAL_MESSAGES = 20; // keep last 40 messages global
-const MAX_USER_MESSAGES = 15;   // per-user short memory
+const MAX_GLOBAL_MESSAGES = 10; // keep last 40 messages global
+const MAX_USER_MESSAGES = 10;   // per-user short memory
 
 // Helper: timestamp
 function timestamp() {
@@ -83,7 +82,7 @@ async function askGeminiCombined(userId, userMessage, username) {
     // 1) Save the incoming user message to memory BEFORE generating reply
     const userMsgText = `${username} says: ${userMessage}`;
     addToGlobalMemory("user", userMsgText);
-    addToUserMemory(userId, "user", userMessage);
+    //addToUserMemory(userId, "user", userMessage);
 
     // 2) Build prompt context (persona + global memory + small per-user memory)
     const globalContext = buildGlobalContext();
@@ -94,13 +93,11 @@ ${globalMemory.persona}
 
 Global Memory:
 ${globalContext}
-
-User Memory (recent):
-${userContext ? userContext : "(none)"}
+"}
 `;
 
     // 3) Compose the request content
-    const prompt = `${context}\n${username} says: "${userMessage}"\nRespond as Kokie with a short, simple, human reply (no emoji).`;
+    const prompt = `${context}\n${username} says: "${userMessage}"\nRespond as Kokie.`;
 
     // 4) Call the model
     const response = await ai.models.generateContent({
@@ -117,7 +114,7 @@ ${userContext ? userContext : "(none)"}
 
     // 6) Save Kokie's reply to memory
     addToGlobalMemory("kokie", reply);
-    addToUserMemory(userId, "kokie", reply);
+    //addToUserMemory(userId, "kokie", reply);
 
     return reply;
 
@@ -168,6 +165,19 @@ client.on("messageCreate", async (message) => {
     globalMemory.persona = newPersona;
     return message.channel.send("Kokie has updated her persona.");
   }
+  
+  if (isCommand(text, "?model ")) {
+    const newMODEL = text.slice("?model ".length).trim();
+    if (newMODEL.length < 3) {
+      return message.channel.send("model too short.");
+    }
+    MODEL = newMODEL;
+    return message.channel.send("Kokie has updated her model.");
+  }
+  
+  if (text === "?model") {
+    return message.channel.send(`Current model:${MODEL}`);
+  }
 
   if (text === "?persona") {
     return message.channel.send(`Current persona:\n${globalMemory.persona}`);
@@ -183,9 +193,17 @@ client.on("messageCreate", async (message) => {
     memory.delete(userId);
     return message.channel.send("I forgot our recent conversation (for you).");
   }
+  
+  if (text === "?stop") {
+      stop = true;
+  }
+  
+  if (text === "?start") {
+      stop = false;
+  }
 
   // ----- AI REPLY -----
-
+if (stop) return;
   try {
     await message.channel.sendTyping();
     const reply = await askGeminiCombined(userId, text, username);
@@ -204,3 +222,5 @@ client.on("messageCreate", async (message) => {
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
+
+
