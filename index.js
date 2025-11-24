@@ -7,7 +7,7 @@ import keep_alive from './keep_alive.js'; // optional, keep if you have it
 // ------------------- CONFIG -------------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client();
-const MODEL = "gemini-2.0-flash";
+const MODEL = "gemini-2.5-flash";
 
 // Default persona (trimmed into globalMemory on startup)
 const defaultPersona = `
@@ -194,3 +194,4 @@ client.on("messageCreate", async (message) => {
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
+
