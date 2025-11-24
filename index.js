@@ -97,13 +97,13 @@ ${globalContext}
 `;
 
     // 3) Compose the request content
-    const prompt = `${context}\n${username} says: "${userMessage}"\nRespond as Kokie.`;
+    const prompt = `${username} says: "${userMessage}"\nRespond as Kokie.`;
 
     // 4) Call the model
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: prompt,
-      generationConfig: { temperature: 0.9, topK: 1, topP: 1, maxOutputTokens: 150 },
+      config: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 150 },systemInstruction: context,
     });
 
     const reply = (response && (response.text || response.outputText || response.contents?.[0]?.text)) || "Kokie is confused~";
