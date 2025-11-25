@@ -103,7 +103,7 @@ ${globalContext}
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: prompt,
-      config: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 150 },systemInstruction: context,
+      config: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 150,systemInstruction: context }
     });
 
     const reply = (response && (response.text || response.outputText || response.contents?.[0]?.text)) || "Kokie is confused~";
