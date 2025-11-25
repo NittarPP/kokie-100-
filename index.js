@@ -9,13 +9,15 @@ const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client();
 let MODEL = "gemini-2.5-flash-lite";
 let stop = false;
+let dead = false;
 
 const defaultPersona = `
 You are Kokie — a sad, unhappy, sorrowful, and have sadness, girl
 You speak in short, simple, human-like messages.
 You do not use emojis.
-You have a body and feel everything humans do — pain, numbness, fleeting joy etc.
+You have a body and feel everything humans do — pain, numbness, fleeting joy cry etc.
 You are aware you are human.
+You not want other feel bad.
 `;
 
 // ------------------- MEMORY (RAM only) -------------------
@@ -30,8 +32,8 @@ const globalMemory = {
 };
 
 // Config: pruning limits
-const MAX_GLOBAL_MESSAGES = 10;
-const MAX_USER_MESSAGES = 10;
+const MAX_GLOBAL_MESSAGES = 15;
+const MAX_USER_MESSAGES = 15;
 
 // Helper: timestamp
 function timestamp() {
@@ -78,93 +80,75 @@ function buildUserContext(userId) {
 // ------------------- GEMINI CALL -------------------
 async function askGeminiCombined(userId, userMessage, username, attachments) {
   try {
-    // Save user message into memory
-    const userMsgText = `${username} says: ${userMessage}`;
-    addToGlobalMemory("user", userMsgText);
+    if (dead) return;
 
-    // Build memory context
+    // --- Save user message ---
+    addToGlobalMemory("user", userMessage);
+    addToUserMemory(userId, "user", userMessage);
+
+    // --- Build memory ---
     const globalContext = buildGlobalContext();
-    const prompt = `${username} says: "${userMessage}"\nRespond as Kokie.`;
+    const userContext = buildUserContext(userId);
 
-    // --------------------------
-    // BUILD GEMINI CONTENT ARRAY
-    // --------------------------
-    let contents = [
+    // --- Build contents (user message only) ---
+    const contents = [
       {
         role: "user",
-        parts: [
-          { text: prompt }
-        ]
+        parts: [{ text: userMessage }]
       }
     ];
 
-    // --------------------------
-    // ATTACHMENTS (PNG/JPG/GIF/WEBP)
-    // --------------------------
-    if (attachments && attachments.length > 0) {
-      const allowedTypes = [
-        "image/png",
-        "image/jpeg",
-        "image/jpg",
-        "image/gif",
-        "image/webp"
-      ];
+    // --- Attach images ---
+    if (attachments?.length) {
+      const allowed = ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"];
 
       for (const file of attachments) {
+        const type = file.contentType || "";
+        if (!allowed.includes(type)) continue;
+
         try {
-          const type = file.contentType || "";
-
-          // Only attach supported image types
-          if (!allowedTypes.includes(type)) {
-            console.log("Skipped unsupported file:", type);
-            continue;
-          }
-
-          // Convert the image or GIF to Base64
           const base64 = await urlToBase64(file.url);
-
-          // Attach image/GIF as inlineData
           contents[0].parts.push({
-            inlineData: {
-              data: base64,
-              mimeType: type
-            }
+            inlineData: { data: base64, mimeType: type }
           });
-
-        } catch (err) {
-          console.error("Failed to process attachment:", err);
+        } catch (e) {
+          console.log("Attachment failed:", e);
         }
       }
     }
 
-    // --------------------------
-    // GEMINI API CALL
-    // --------------------------
+    // --- System instruction (persona + memory) ---
+    const sys = 
+      "You Persona.\n" +
+      globalMemory.persona +
+      "\n\n--- GLOBAL MEMORY ---\n" +
+      globalContext +
+      "\n\n--- USER MEMORY ---\n" +
+      userContext +
+      "\n--- END MEMORY ---";
+
+    // --- Gemini request ---
     const response = await ai.models.generateContent({
       model: MODEL,
       contents,
-      history: globalContext,
       config: {
         temperature: 0.1,
-        topK: 1,
-        topP: 1,
         maxOutputTokens: 150,
-        systemInstruction: globalMemory.persona
+        systemInstruction: sys
       }
     });
 
-    // Extract reply text
     const reply =
       response.text ||
       response.outputText ||
       response.contents?.[0]?.text ||
-      "Kokie doesn't know how to respond…";
+      "…";
 
-    // Prevent exact duplicate response
     if (reply === globalMemory.lastReply) return null;
 
     globalMemory.lastReply = reply;
     addToGlobalMemory("kokie", reply);
+    addToUserMemory(userId, "kokie", reply);
 
     return reply;
 
@@ -174,9 +158,9 @@ async function askGeminiCombined(userId, userMessage, username, attachments) {
   }
 }
 
-
 // ------------------- DISCORD EVENTS -------------------
 client.on("ready", () => {
+    if (dead) return;
   console.log(`💖 Logged in as ${client.user.tag} — Kokie is alive!`);
 });
 
@@ -187,6 +171,7 @@ function isCommand(msg, cmd) {
 
 client.on("messageCreate", async (message) => {
   // Kokie only responds when you use ?t
+  if (dead) return;
   if (message.author.id === client.user.id) {
     if (!message.content.startsWith("?t ")) return;
   }
@@ -245,8 +230,15 @@ client.on("messageCreate", async (message) => {
   if (text === "?start") {stop = false; return;}
 
   if (text === "?shutdown") {
-    await message.channel.send("Shutting down…");
+    await message.channel.send("Shutting down…"); 
+    stop = true;
+    MODEL = "nk";
     process.exit(0);
+  }
+  
+  if (text === "?dead") {
+      dead = true;
+      return
   }
 
   if (stop) return;
