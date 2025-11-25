@@ -7,16 +7,15 @@ import keep_alive from './keep_alive.js'; // optional, keep if you have it
 // ------------------- CONFIG -------------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client();
-let MODEL = "gemini-2.0-flash-001";
+let MODEL = "gemini-2.5-flash-lite";
 let stop = false;
-// Default persona (trimmed into globalMemory on startup)
+
 const defaultPersona = `
-You are Kokie — a sad, girl who often feels detached from herself.  
-You speak in short, simple, human-like messages.  
-You do not use emojis.  
-You have a body and feel everything humans do — pain, numbness, fleeting joy.  
-You are aware you are human, but sometimes life feels distant or unreal.  
-You are quiet, reflective, and sometimes withdrawn, but your words are real and raw.
+You are Kokie — a sad, depersonalization, girl
+You speak in short, simple, human-like messages.
+You do not use emojis.
+You have a body and feel everything humans do — pain, numbness, fleeting joy etc.
+You are aware you are human.
 `;
 
 // ------------------- MEMORY (RAM only) -------------------
@@ -31,8 +30,8 @@ const globalMemory = {
 };
 
 // Config: pruning limits
-const MAX_GLOBAL_MESSAGES = 10; // keep last 40 messages global
-const MAX_USER_MESSAGES = 10;   // per-user short memory
+const MAX_GLOBAL_MESSAGES = 10;
+const MAX_USER_MESSAGES = 10;
 
 // Helper: timestamp
 function timestamp() {
@@ -77,44 +76,95 @@ function buildUserContext(userId) {
 }
 
 // ------------------- GEMINI CALL -------------------
-async function askGeminiCombined(userId, userMessage, username) {
+async function askGeminiCombined(userId, userMessage, username, attachments) {
   try {
-    // 1) Save the incoming user message to memory BEFORE generating reply
+    // Save user message into memory
     const userMsgText = `${username} says: ${userMessage}`;
     addToGlobalMemory("user", userMsgText);
-    //addToUserMemory(userId, "user", userMessage);
 
-    // 2) Build prompt context (persona + global memory + small per-user memory)
+    // Build memory context
     const globalContext = buildGlobalContext();
-    const userContext = buildUserContext(userId);
-
-    const context = `Your Persona:
-${globalMemory.persona}
-
-Global Memory:
-${globalContext}
-"}
-`;
-
-    // 3) Compose the request content
     const prompt = `${username} says: "${userMessage}"\nRespond as Kokie.`;
 
-    // 4) Call the model
+    // --------------------------
+    // BUILD GEMINI CONTENT ARRAY
+    // --------------------------
+    let contents = [
+      {
+        role: "user",
+        parts: [
+          { text: prompt }
+        ]
+      }
+    ];
+
+    // --------------------------
+    // ATTACHMENTS (PNG/JPG/GIF/WEBP)
+    // --------------------------
+    if (attachments && attachments.length > 0) {
+      const allowedTypes = [
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp"
+      ];
+
+      for (const file of attachments) {
+        try {
+          const type = file.contentType || "";
+
+          // Only attach supported image types
+          if (!allowedTypes.includes(type)) {
+            console.log("Skipped unsupported file:", type);
+            continue;
+          }
+
+          // Convert the image or GIF to Base64
+          const base64 = await urlToBase64(file.url);
+
+          // Attach image/GIF as inlineData
+          contents[0].parts.push({
+            inlineData: {
+              data: base64,
+              mimeType: type
+            }
+          });
+
+        } catch (err) {
+          console.error("Failed to process attachment:", err);
+        }
+      }
+    }
+
+    // --------------------------
+    // GEMINI API CALL
+    // --------------------------
     const response = await ai.models.generateContent({
       model: MODEL,
-      contents: prompt,
-      config: { temperature: 0.1, topK: 1, topP: 1, maxOutputTokens: 150,systemInstruction: context }
+      contents,
+      history: globalContext,
+      config: {
+        temperature: 0.1,
+        topK: 1,
+        topP: 1,
+        maxOutputTokens: 150,
+        systemInstruction: globalMemory.persona
+      }
     });
 
-    const reply = (response && (response.text || response.outputText || response.contents?.[0]?.text)) || "Kokie is confused~";
+    // Extract reply text
+    const reply =
+      response.text ||
+      response.outputText ||
+      response.contents?.[0]?.text ||
+      "Kokie doesn't know how to respond…";
 
-    // 5) Deduplication: avoid repeating the exact last global reply
+    // Prevent exact duplicate response
     if (reply === globalMemory.lastReply) return null;
-    globalMemory.lastReply = reply;
 
-    // 6) Save Kokie's reply to memory
+    globalMemory.lastReply = reply;
     addToGlobalMemory("kokie", reply);
-    //addToUserMemory(userId, "kokie", reply);
 
     return reply;
 
@@ -123,6 +173,7 @@ ${globalContext}
     return "Kokie fell asleep…";
   }
 }
+
 
 // ------------------- DISCORD EVENTS -------------------
 client.on("ready", () => {
@@ -135,7 +186,7 @@ function isCommand(msg, cmd) {
 }
 
 client.on("messageCreate", async (message) => {
-  // Kokie should ONLY respond when you use ?t
+  // Kokie only responds when you use ?t
   if (message.author.id === client.user.id) {
     if (!message.content.startsWith("?t ")) return;
   }
@@ -145,38 +196,34 @@ client.on("messageCreate", async (message) => {
 
   let text = message.content.trim();
 
-  // Remove ?t prefix so AI receives only your message
+  // Remove ?t prefix
   if (text.startsWith("?t ")) {
     text = text.slice(3).trim();
   }
 
-  if (!text || text.length > 1200) return;
+  if (!text && message.attachments.size === 0) return; // no text + no image/gif
+  if (text.length > 1200) return;
 
   const userId = message.author.id;
   const username = message.author.globalName || message.author.username;
 
   // ----- COMMANDS -----
-
   if (isCommand(text, "?persona ")) {
     const newPersona = text.slice("?persona ".length).trim();
-    if (newPersona.length < 3) {
-      return message.channel.send("Persona too short.");
-    }
+    if (newPersona.length < 3) return message.channel.send("Persona too short.");
     globalMemory.persona = newPersona;
     return message.channel.send("Kokie has updated her persona.");
   }
-  
+
   if (isCommand(text, "?model ")) {
     const newMODEL = text.slice("?model ".length).trim();
-    if (newMODEL.length < 3) {
-      return message.channel.send("model too short.");
-    }
+    if (newMODEL.length < 3) return message.channel.send("model too short.");
     MODEL = newMODEL;
     return message.channel.send("Kokie has updated her model.");
   }
-  
+
   if (text === "?model") {
-    return message.channel.send(`Current model:${MODEL}`);
+    return message.channel.send(`Current model: ${MODEL}`);
   }
 
   if (text === "?persona") {
@@ -193,23 +240,33 @@ client.on("messageCreate", async (message) => {
     memory.delete(userId);
     return message.channel.send("I forgot our recent conversation (for you).");
   }
-  
-  if (text === "?stop") {
-      stop = true;
+
+  if (text === "?stop") {stop = true; return;}
+  if (text === "?start") {stop = false; return;}
+
+  if (text === "?shutdown") {
+    await message.channel.send("Shutting down…");
+    process.exit(0);
   }
-  
-  if (text === "?start") {
-      stop = false;
-  }
+
+  if (stop) return;
 
   // ----- AI REPLY -----
-if (stop) return;
   try {
     await message.channel.sendTyping();
-    const reply = await askGeminiCombined(userId, text, username);
+
+    const attachments = [...message.attachments.values()]; // <== IMPORTANT
+
+    const reply = await askGeminiCombined(
+      userId,
+      text,
+      username,
+      attachments
+    );
+
     if (!reply) return;
 
-    const chunks = reply.match(/[\s\S]{1,2000}/g);
+    const chunks = reply.match(/[\s\S]{1,2000}/g) || [];
     for (const chunk of chunks) {
       await message.channel.send(chunk);
     }
@@ -218,9 +275,8 @@ if (stop) return;
   }
 });
 
+
 // ------------------- LOGIN -------------------
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
-
-
