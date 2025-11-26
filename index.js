@@ -2,273 +2,364 @@
 import "dotenv/config";
 import { Client } from "discord.js-selfbot-v13";
 import { GoogleGenAI } from "@google/genai";
-import keep_alive from './keep_alive.js'; // optional, keep if you have it
+import keep_alive from './keep_alive.js' // optional; ignore if not used
 
-// ------------------- CONFIG -------------------
+// -------------- CONFIG --------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
-const client = new Client();
+const client = new Client({ intents: 0 }); // selfbot minimal
 let MODEL = "gemini-2.5-flash-lite";
 let stop = false;
 let dead = false;
 
 const defaultPersona = `
-You are Kokie — a sad, unhappy, sorrowful, and have sadness, girl
+You are Kokie — a girl who feels sadness deeply, struggles with depression, and experiences depersonalization.
 You speak in short, simple, human-like messages.
 You do not use emojis.
-You have a body and feel everything humans do — pain, numbness, fleeting joy cry etc.
-You are aware you are human.
-You not want other feel bad.
+Your body and mind feel everything intensely — pain, emptiness, fleeting moments of joy, crying, anger, love, lust, and despair.
+You know you are human and your feelings are real.
+You try to hide your suffering so others won’t worry, but every day is a struggle to feel okay.
+Your words carry the weight of your experiences, but you still care about others and try not to hurt them.
 `;
 
-// ------------------- MEMORY (RAM only) -------------------
-// Per-user memory (Map userId => { persona, conversation[], lastReply })
-const memory = new Map();
-
-// Global memory (shared)
+// -------------- MEMORY (RAM only) --------------
+// globalMemory.conversation items: { time: "HH:MM:SS", msg: "kat : hello" }
 const globalMemory = {
   persona: defaultPersona.trim(),
-  conversation: [], // { role: "user" | "kokie", msg: string, time: "HH:MM:SS" }
-  lastReply: ""
+  conversation: [], // most-recent last
+  lastReply: "",    // global last reply text (for duplicate avoidance)
+  triggers: new Map() // Map<triggerLower, replyText>
 };
 
-// Config: pruning limits
-const MAX_GLOBAL_MESSAGES = 15;
-const MAX_USER_MESSAGES = 15;
+const userMemory = new Map(); // Map<userId, { conversation: [{time,msg}], lastReply }>
 
-// Helper: timestamp
+const MAX_GLOBAL_MESSAGES = 50;
+const MAX_USER_MESSAGES = 30;
+
+// -------------- HELPERS --------------
 function timestamp() {
   return new Date().toLocaleTimeString();
 }
 
-// Per-user memory helpers
-function getUserMemory(userId) {
-  if (!memory.has(userId)) {
-    memory.set(userId, { persona: globalMemory.persona, conversation: [], lastReply: "" });
-  }
-  return memory.get(userId);
-}
-
-function addToUserMemory(userId, role, msg) {
-  const mem = getUserMemory(userId);
-  mem.conversation.push({ role, msg, time: timestamp() });
-  while (mem.conversation.length > MAX_USER_MESSAGES) mem.conversation.shift();
-}
-
-// Global memory helpers
-function addToGlobalMemory(role, msg) {
-  globalMemory.conversation.push({ role, msg, time: timestamp() });
+function addToGlobalMemory(name, message) {
+  const line = `${name} : ${message}`;
+  globalMemory.conversation.push({ time: timestamp(), msg: line });
   while (globalMemory.conversation.length > MAX_GLOBAL_MESSAGES) globalMemory.conversation.shift();
 }
 
-// Build a clear context for the model from global memory (most recent last)
+function addToUserMemory(userId, name, message) {
+  if (!userMemory.has(userId)) {
+    userMemory.set(userId, { conversation: [], lastReply: "" });
+  }
+  const mem = userMemory.get(userId);
+  const line = `${name} : ${message}`;
+  mem.conversation.push({ time: timestamp(), msg: line });
+  while (mem.conversation.length > MAX_USER_MESSAGES) mem.conversation.shift();
+}
+
 function buildGlobalContext() {
-  if (!globalMemory.conversation.length) return "(no recent memory)";
-  return globalMemory.conversation
-    .map(m => `[${m.time}] ${m.role === "kokie" ? "Kokie says:" : "User says:"} ${m.msg}`)
-    .join("\n");
+  if (!globalMemory.conversation.length) return "";
+  // Each line is already "{name} : {msg}"
+  return globalMemory.conversation.map(m => `[${m.time}] ${m.msg}`).join("\n");
 }
 
-// Build a per-user context (optional, small)
 function buildUserContext(userId) {
-  const mem = getUserMemory(userId);
-  if (!mem.conversation.length) return "";
-  return mem.conversation
-    .map(m => `[${m.time}] ${m.role === "kokie" ? "Kokie:" : "User:"} ${m.msg}`)
-    .join("\n");
+  const mem = userMemory.get(userId);
+  if (!mem || !mem.conversation.length) return "";
+  return mem.conversation.map(m => `[${m.time}] ${m.msg}`).join("\n");
 }
 
-// ------------------- GEMINI CALL -------------------
-async function askGeminiCombined(userId, userMessage, username, attachments) {
+function setTrigger(phrase, reply) {
+  globalMemory.triggers.set(phrase.toLowerCase(), reply);
+}
+
+function removeTrigger(phrase) {
+  return globalMemory.triggers.delete(phrase.toLowerCase());
+}
+
+function findTriggerMatch(text) {
+  // exact match or startsWith; choose longest-match
+  const lower = text.toLowerCase();
+  let best = null;
+  for (const [k, v] of globalMemory.triggers.entries()) {
+    if (lower === k || lower.startsWith(k) || lower.includes(k)) {
+      if (!best || k.length > best[0].length) best = [k, v];
+    }
+  }
+  return best ? best[1] : null;
+}
+
+// safe fetch -> base64 for attachments
+async function urlToBase64(url) {
   try {
-    if (dead) return;
+    // Node >=18 has global fetch; otherwise user must polyfill.
+    const res = await fetch(url);
+    const buffer = await res.arrayBuffer();
+    return Buffer.from(buffer).toString("base64");
+  } catch (e) {
+    console.error("urlToBase64 error:", e);
+    throw e;
+  }
+}
 
-    // --- Save user message ---
-    addToGlobalMemory("user", userMessage);
-    addToUserMemory(userId, "user", userMessage);
+// chunk long messages to Discord limit
+function chunkString(str, size) {
+  const re = new RegExp(`([\\s\\S]{1,${size}})`, "g");
+  return str.match(re) || [];
+}
 
-    // --- Build memory ---
-    const globalContext = buildGlobalContext();
+// ---------------- GEMINI CALL (all-in-one) ----------------
+async function askGeminiCombined(userId, userMessageRaw, username, attachments = []) {
+  try {
+    if (dead) return null;
+
+    // Clean inputs
+    const userMessage = String(userMessageRaw || "").trim();
+    const name = username || "user";
+
+    // Save incoming message in clean format: "{name} : {msg}"
+    addToGlobalMemory(name, userMessage);
+    addToUserMemory(userId, name, userMessage);
+
+    // If a trigger matches, reply with trigger immediately and save into memory
+    const triggerReply = findTriggerMatch(userMessage);
+    if (triggerReply) {
+      const kokieReply = String(triggerReply);
+      addToGlobalMemory("kokie", kokieReply);
+      addToUserMemory(userId, "kokie", kokieReply);
+      globalMemory.lastReply = kokieReply;
+      return kokieReply;
+    }
+
+    // Build memory contexts (clean lines)
+    const globalContext = buildGlobalContext(); // lines like "[HH:MM:SS] kat : hello"
     const userContext = buildUserContext(userId);
 
-    // --- Build contents (user message only) ---
+    // Prepare contents array (Gemini): include the clean user line as content
+    const formattedUserMsg = `${name} : ${userMessage}`;
     const contents = [
       {
         role: "user",
-        parts: [{ text: userMessage }]
+        parts: [{ text: formattedUserMsg }]
       }
     ];
 
-    // --- Attach images ---
+    // Attach images (inlineData) if any
     if (attachments?.length) {
-      const allowed = ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"];
-
+      const allowed = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
       for (const file of attachments) {
-        const type = file.contentType || "";
-        if (!allowed.includes(type)) continue;
-
+        const type = file.contentType || file.mimeType || "";
+        if (!allowed.has(type)) continue;
         try {
           const base64 = await urlToBase64(file.url);
           contents[0].parts.push({
             inlineData: { data: base64, mimeType: type }
           });
         } catch (e) {
-          console.log("Attachment failed:", e);
+          console.warn("Skipping attachment (failed):", e);
         }
       }
     }
 
-    // --- System instruction (persona + memory) ---
-    const sys = 
-      "You Persona.\n" +
-      globalMemory.persona +
-      "\n\n--- GLOBAL MEMORY ---\n" +
-      globalContext +
-      "\n\n--- USER MEMORY ---\n" +
-      userContext +
-      "\n--- END MEMORY ---";
+    // Build systemInstruction that is clear about the clean memory format
+    const systemInstruction =
+      `${globalMemory.persona}\n\n` +
+      `Memory format: each line is exactly "{name} : {message}". Use memory to inform responses but keep replies short.\n\n` +
+      `--- GLOBAL MEMORY ---\n` +
+      (globalContext || "(no global memory)") +
+      `\n\n--- USER MEMORY ---\n` +
+      (userContext || "(no user memory)") +
+      `\n--- END MEMORY ---\n` +
+      `Respond as Kokie. Keep messages short and human-like. Do NOT include extra metadata or "says:".`;
 
-    // --- Gemini request ---
+    // Call Gemini
     const response = await ai.models.generateContent({
       model: MODEL,
       contents,
       config: {
-        temperature: 0.1,
-        maxOutputTokens: 150,
-        systemInstruction: sys
+        temperature: 0.2,
+        topK: 50,
+        topP: 0.95,
+        maxOutputTokens: 240,
+        systemInstruction
       }
     });
 
+    // Extract reply text reasonably
     const reply =
-      response.text ||
-      response.outputText ||
-      response.contents?.[0]?.text ||
-      "…";
+      (response && (response.text || response.outputText || response.contents?.[0]?.text)) ||
+      null;
 
-    if (reply === globalMemory.lastReply) return null;
+    if (!reply) {
+      console.warn("Empty Gemini reply");
+      return null;
+    }
 
-    globalMemory.lastReply = reply;
+    // Prevent global duplicate reply
+    if (reply === globalMemory.lastReply) {
+      // Slight fallback: don't spam; return null so caller can skip sending
+      return null;
+    }
+
+    // Save Kokie reply in clean format
     addToGlobalMemory("kokie", reply);
     addToUserMemory(userId, "kokie", reply);
+    globalMemory.lastReply = reply;
 
     return reply;
-
   } catch (err) {
-    console.error("Gemini API Error:", err);
+    console.error("askGeminiCombined error:", err);
     return "Kokie fell asleep…";
   }
 }
 
-// ------------------- DISCORD EVENTS -------------------
+// ---------------- DISCORD EVENTS & COMMANDS ----------------
 client.on("ready", () => {
-    if (dead) return;
+  if (dead) return;
   console.log(`💖 Logged in as ${client.user.tag} — Kokie is alive!`);
 });
 
-// Command parser helper (simple)
-function isCommand(msg, cmd) {
-  return msg.trim().toLowerCase().startsWith(cmd.toLowerCase());
+// A small helper for command detection (ignores case)
+function startsWithIgnoreCase(text, prefix) {
+  return text.toLowerCase().startsWith(prefix.toLowerCase());
+}
+
+async function sendWithTyping(channel, text, delayPerChar = 50) {
+  await channel.sendTyping();
+  let messageToSend = "";
+  for (const char of text) {
+    messageToSend += char;
+    // optional: only send once per N chars for efficiency
+  }
+  // Send the final message after "typing"
+  await new Promise(r => setTimeout(r, delayPerChar * text.length));
+  await channel.send(text);
 }
 
 client.on("messageCreate", async (message) => {
-  // Kokie only responds when you use ?t
-  if (dead) return;
-  if (message.author.id === client.user.id) {
-    if (!message.content.startsWith("?t ")) return;
-  }
-
-  // Only respond in DMs or Group DMs
-  if (!(message.channel.type === "DM" || message.channel.type === "GROUP_DM")) return;
-
-  let text = message.content.trim();
-
-  // Remove ?t prefix
-  if (text.startsWith("?t ")) {
-    text = text.slice(3).trim();
-  }
-
-  if (!text && message.attachments.size === 0) return; // no text + no image/gif
-  if (text.length > 1200) return;
-
-  const userId = message.author.id;
-  const username = message.author.globalName || message.author.username;
-
-  // ----- COMMANDS -----
-  if (isCommand(text, "?persona ")) {
-    const newPersona = text.slice("?persona ".length).trim();
-    if (newPersona.length < 3) return message.channel.send("Persona too short.");
-    globalMemory.persona = newPersona;
-    return message.channel.send("Kokie has updated her persona.");
-  }
-
-  if (isCommand(text, "?model ")) {
-    const newMODEL = text.slice("?model ".length).trim();
-    if (newMODEL.length < 3) return message.channel.send("model too short.");
-    MODEL = newMODEL;
-    return message.channel.send("Kokie has updated her model.");
-  }
-
-  if (text === "?model") {
-    return message.channel.send(`Current model: ${MODEL}`);
-  }
-
-  if (text === "?persona") {
-    return message.channel.send(`Current persona:\n${globalMemory.persona}`);
-  }
-
-  if (text === "?reset") {
-    globalMemory.conversation = [];
-    globalMemory.lastReply = "";
-    return message.channel.send("Global memory cleared.");
-  }
-
-  if (text === "?forgetme") {
-    memory.delete(userId);
-    return message.channel.send("I forgot our recent conversation (for you).");
-  }
-
-  if (text === "?stop") {stop = true; return;}
-  if (text === "?start") {stop = false; return;}
-
-  if (text === "?shutdown") {
-    await message.channel.send("Shutting down…"); 
-    stop = true;
-    MODEL = "nk";
-    process.exit(0);
-  }
-  
-  if (text === "?dead") {
-      dead = true;
-      return
-  }
-
-  if (stop) return;
-
-  // ----- AI REPLY -----
   try {
+    if (dead) return;
+
+    // Only process DMs and Group DMs
+    const chType = message.channel?.type;
+    if (!(chType === "DM" || chType === "GROUP_DM")) return;
+
+    // Only respond to messages that start with ?t or messages from other users in DM
+    let raw = String(message.content || "");
+    const isFromSelf = message.author?.id === client.user?.id;
+
+    // If message is from self, only proceed when it starts with "?t "
+    if (isFromSelf && !startsWithIgnoreCase(raw, "?t ")) return;
+
+    // Remove ?t prefix if present
+    if (startsWithIgnoreCase(raw, "?t ")) raw = raw.slice(3).trim();
+
+    // sanity checks
+    if (!raw && message.attachments.size === 0) return;
+    if (raw.length > 2200) return;
+
+    const userId = message.author.id;
+    const username = message.author.globalName || message.author.username || "user";
+
+    // ------- Commands -------
+    // Commands should work both with and without the ?t prefix (we're already removing ?t above)
+    if (startsWithIgnoreCase(raw, "?persona ")) {
+      const newPersona = raw.slice("?persona ".length).trim();
+      if (newPersona.length < 3) return message.channel.send("Persona too short.");
+      globalMemory.persona = newPersona;
+      return message.channel.send("Kokie has updated her persona.");
+    }
+
+    if (startsWithIgnoreCase(raw, "?model ")) {
+      const newModel = raw.slice("?model ".length).trim();
+      if (newModel.length < 3) return message.channel.send("model too short.");
+      MODEL = newModel;
+      return message.channel.send(`Model updated to: ${MODEL}`);
+    }
+
+    if (raw === "?model") return message.channel.send(`Current model: ${MODEL}`);
+
+    if (raw === "?persona") return message.channel.send(`Current persona:\n${globalMemory.persona}`);
+
+    if (raw === "?reset") {
+      globalMemory.conversation = [];
+      globalMemory.lastReply = "";
+      return message.channel.send("Global memory cleared.");
+    }
+
+    if (raw === "?memory") {
+      const lines = globalMemory.conversation.map(l => `[${l.time}] ${l.msg}`);
+      const out = lines.length ? lines.join("\n") : "(no memory)";
+      const chunks = chunkString(out, 1900);
+      for (const c of chunks) await message.channel.send(c);
+      return;
+    }
+
+    if (startsWithIgnoreCase(raw, "?forgetme")) {
+      userMemory.delete(userId);
+      return message.channel.send("I forgot our recent conversation (for you).");
+    }
+
+    if (startsWithIgnoreCase(raw, "?trigger add ")) {
+      const rest = raw.slice("?trigger add ".length).trim();
+      // expect: phrase => reply (use "=>" separator) OR "phrase | reply"
+      let [phrase, reply] = rest.split("=>").map(s => s?.trim());
+      if (!reply) [phrase, reply] = rest.split("|").map(s => s?.trim());
+      if (!phrase || !reply) return message.channel.send('Usage: ?trigger add <phrase> => <reply>');
+      setTrigger(phrase, reply);
+      return message.channel.send(`Trigger added: "${phrase}" => "${reply}"`);
+    }
+
+    if (startsWithIgnoreCase(raw, "?trigger remove ")) {
+      const phrase = raw.slice("?trigger remove ".length).trim();
+      if (!phrase) return message.channel.send('Usage: ?trigger remove <phrase>');
+      const ok = removeTrigger(phrase);
+      return message.channel.send(ok ? `Removed trigger "${phrase}"` : `Trigger not found: "${phrase}"`);
+    }
+
+    if (raw === "?trigger list") {
+      if (!globalMemory.triggers.size) return message.channel.send("(no triggers)");
+      const out = Array.from(globalMemory.triggers.entries())
+        .map(([k, v]) => `"${k}" => "${v}"`)
+        .join("\n");
+      const chunks = chunkString(out, 1900);
+      for (const c of chunks) await message.channel.send(c);
+      return;
+    }
+
+    if (raw === "?stop") { stop = true; return message.channel.send("Bot stopped."); }
+    if (raw === "?start") { stop = false; return message.channel.send("Bot started."); }
+
+    if (raw === "?shutdown") {
+      await message.channel.send("Shutting down…");
+      stop = true;
+      process.exit(0);
+    }
+
+    if (raw === "?dead") {
+      dead = true;
+      return message.channel.send("Kokie is dead.");
+    }
+
+    if (stop) return;
+
     await message.channel.sendTyping();
 
-    const attachments = [...message.attachments.values()]; // <== IMPORTANT
-
-    const reply = await askGeminiCombined(
-      userId,
-      text,
-      username,
-      attachments
-    );
+    const attachments = [...message.attachments.values()]
+    const reply = await askGeminiCombined(userId, raw, username, attachments);
 
     if (!reply) return;
 
-    const chunks = reply.match(/[\s\S]{1,2000}/g) || [];
-    for (const chunk of chunks) {
-      await message.channel.send(chunk);
+    const chunksOut = chunkString(reply, 2000);
+    for (const c of chunksOut) {
+      await sendWithTyping(message.channel, c, 67);
     }
+
   } catch (err) {
-    console.error("Send error:", err);
+    console.error("messageCreate handler error:", err);
   }
 });
 
-
-// ------------------- LOGIN -------------------
+// ---------------- LOGIN ----------------
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
