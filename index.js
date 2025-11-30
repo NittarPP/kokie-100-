@@ -349,7 +349,7 @@ client.on("messageCreate", async (message) => {
 
     const chunksOut = chunkString(reply, 2000);
     for (const c of chunksOut) {
-      lastsend = raw; // store the raw string we replied to (duplicate prevention)
+      lastsend = reply;
       await sendWithTyping(message.channel, c, 67);
     }
 
