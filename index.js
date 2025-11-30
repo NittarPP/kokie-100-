@@ -242,13 +242,13 @@ client.on("messageCreate", async (message) => {
 
     // Only respond to messages that start with ?t or messages from other users in DM
     let raw = String(message.content || "");
-    const isFromSelf = message.author?.id === client.user?.id;
+    //const isFromSelf = message.author?.id === client.user?.id;
 
     // If message is from self, only proceed when it starts with "?t "
-    if (isFromSelf && !startsWithIgnoreCase(raw, "?t ")) return;
+    //if (isFromSelf && !startsWithIgnoreCase(raw, "?t ")) return;
 
     // Remove ?t prefix if present
-    if (startsWithIgnoreCase(raw, "?t ")) raw = raw.slice(3).trim();
+    //if (startsWithIgnoreCase(raw, "?t ")) raw = raw.slice(3).trim();
 
     // sanity checks
     if (!raw && message.attachments.size === 0) return;
