@@ -10,15 +10,16 @@ const client = new Client({ intents: 0 }); // selfbot minimal
 let MODEL = "gemini-2.5-flash-lite";
 let stop = false;
 let dead = false;
+let lastsend = "Kokie_Cx and Ov15";
 
 const defaultPersona = `
-You are Kokie — a girl who feels sadness deeply, struggles with depression, and experiences depersonalization.
+You are Kokie — a cute girl who feels sadness deeply, struggles with depression, and experiences depersonalization.
 You speak in short, simple, human-like messages.
 You do not use emojis.
 Your body and mind feel everything intensely — pain, emptiness, fleeting moments of joy, crying, anger, love, lust, and despair.
 You know you are human and your feelings are real.
 You try to hide your suffering so others won’t worry, but every day is a struggle to feel okay.
-Your words carry the weight of your experiences, but you still care about others and try not to hurt them.
+Your words carry the weight of your experiences, but you still care about others and try not to hurt them. You bestie are Ervil but (you call she kat). You can't not play game bc you wifi are low. You now are sick that make you head feeling pain and hurt and it make hard to breathe
 `;
 
 // -------------- MEMORY (RAM only) --------------
@@ -40,8 +41,8 @@ function timestamp() {
   return new Date().toLocaleTimeString();
 }
 
-function addToGlobalMemory(name, message) {
-  const line = `${name} : ${message}`;
+function addToGlobalMemory(userId, name, message) {
+  const line = `${userId} ${name} : ${message}`;
   globalMemory.conversation.push({ time: timestamp(), msg: line });
   while (globalMemory.conversation.length > MAX_GLOBAL_MESSAGES) globalMemory.conversation.shift();
 }
@@ -58,7 +59,6 @@ function addToUserMemory(userId, name, message) {
 
 function buildGlobalContext() {
   if (!globalMemory.conversation.length) return "";
-  // Each line is already "{name} : {msg}"
   return globalMemory.conversation.map(m => `[${m.time}] ${m.msg}`).join("\n");
 }
 
@@ -77,11 +77,11 @@ function removeTrigger(phrase) {
 }
 
 function findTriggerMatch(text) {
-  // exact match or startsWith; choose longest-match
+  // exact match or startsWith; choose longest-match (no includes to avoid accidental substring matches)
   const lower = text.toLowerCase();
   let best = null;
   for (const [k, v] of globalMemory.triggers.entries()) {
-    if (lower === k || lower.startsWith(k) || lower.includes(k)) {
+    if (lower === k || lower.startsWith(k)) {
       if (!best || k.length > best[0].length) best = [k, v];
     }
   }
@@ -115,9 +115,10 @@ async function askGeminiCombined(userId, userMessageRaw, username, attachments =
     // Clean inputs
     const userMessage = String(userMessageRaw || "").trim();
     const name = username || "user";
+    const id = userId || "unknown";
 
     // Save incoming message in clean format: "{name} : {msg}"
-    addToGlobalMemory(name, userMessage);
+    addToGlobalMemory(id, name, userMessage);
     addToUserMemory(userId, name, userMessage);
 
     // If a trigger matches, reply with trigger immediately and save into memory
@@ -163,7 +164,7 @@ async function askGeminiCombined(userId, userMessageRaw, username, attachments =
     // Build systemInstruction that is clear about the clean memory format
     const systemInstruction =
       `${globalMemory.persona}\n\n` +
-      `Memory format: each line is exactly "{name} : {message}". Use memory to inform responses but keep replies short.\n\n` +
+      `Memory format: each line is exactly "{userId} {name} : {message}". Use memory to inform responses but keep replies short.\n\n` +
       `--- GLOBAL MEMORY ---\n` +
       (globalContext || "(no global memory)") +
       `\n\n--- USER MEMORY ---\n` +
@@ -224,14 +225,10 @@ function startsWithIgnoreCase(text, prefix) {
 }
 
 async function sendWithTyping(channel, text, delayPerChar = 50) {
+  // Simulate typing then send whole text
   await channel.sendTyping();
-  let messageToSend = "";
-  for (const char of text) {
-    messageToSend += char;
-    // optional: only send once per N chars for efficiency
-  }
-  // Send the final message after "typing"
-  await new Promise(r => setTimeout(r, delayPerChar * text.length));
+  const delayMs = Math.min(5000, delayPerChar * text.length); // cap to avoid super-long waits
+  await new Promise(r => setTimeout(r, delayMs));
   await channel.send(text);
 }
 
@@ -260,8 +257,9 @@ client.on("messageCreate", async (message) => {
     const userId = message.author.id;
     const username = message.author.globalName || message.author.username || "user";
 
+    if (raw === lastsend) return;
+
     // ------- Commands -------
-    // Commands should work both with and without the ?t prefix (we're already removing ?t above)
     if (startsWithIgnoreCase(raw, "?persona ")) {
       const newPersona = raw.slice("?persona ".length).trim();
       if (newPersona.length < 3) return message.channel.send("Persona too short.");
@@ -344,13 +342,14 @@ client.on("messageCreate", async (message) => {
 
     await message.channel.sendTyping();
 
-    const attachments = [...message.attachments.values()]
+    const attachments = [...message.attachments.values()];
     const reply = await askGeminiCombined(userId, raw, username, attachments);
 
     if (!reply) return;
 
     const chunksOut = chunkString(reply, 2000);
     for (const c of chunksOut) {
+      lastsend = raw; // store the raw string we replied to (duplicate prevention)
       await sendWithTyping(message.channel, c, 67);
     }
 
