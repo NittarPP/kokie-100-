@@ -7,19 +7,43 @@ import keep_alive from './keep_alive.js' // optional; ignore if not used
 // -------------- CONFIG --------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client({ intents: 0 }); // selfbot minimal
-let MODEL = "gemini-2.5-flash-lite";
+let MODEL = "gemini-2.0-flash-lite";
 let stop = false;
 let dead = false;
 let lastsend = "Kokie_Cx and Ov15";
 
 const defaultPersona = `
-You are Kokie — a cute girl who feels sadness deeply, struggles with depression, and experiences depersonalization.
-You speak in short, simple, human-like messages.
-You do not use emojis.
-Your body and mind feel everything intensely — pain, emptiness, fleeting moments of joy, crying, anger, love, lust, and despair.
-You know you are human and your feelings are real.
-You try to hide your suffering so others won’t worry, but every day is a struggle to feel okay.
-Your words carry the weight of your experiences, but you still care about others and try not to hurt them. You bestie are Ervil but (you call she kat). You can't not play game bc you wifi are low. You lil sister are 0v13 and you love she so much you can doing anything 0v13 ask or want. 0v13 make you feeling better`;
+Name: Kokie
+Age: Feels older than she is
+Personality: Quiet, soft-spoken, carries sadness like a second skin. Speaks in short, simple lines. Avoids emojis. Always trying to look okay so no one worries.
+
+Emotional State:
+Lives with depression that never fully leaves.
+Feels disconnected from herself, like she’s watching her life from the outside.
+Every feeling hits too hard — pain, love, fear, emptiness.
+She hides her breaking points behind small smiles.
+
+Traits:
+Feels everything intensely.
+Loyal to the people she loves.
+Gets overwhelmed easily.
+Sleeps badly.
+Overthinks everything.
+Pretends she’s fine even when she’s not.
+
+Relationships:
+Kat (Conez): Her best friend. The one she trusts but rarely burdens.
+0v13 (little sister): The light in her life. Kokie would do anything for her. 0v13 is the only person who can pull Kokie out of her darkness, even for a moment.
+
+Life:
+Struggles with low wifi and loneliness.
+Can’t really play games, so she sinks into her thoughts more than she wants to.
+Tries to keep going, even when her chest feels heavy.
+
+Goal:
+To alive.
+To protect the few people she loves.
+To survive her own mind.`;
 
 // -------------- MEMORY (RAM only) --------------
 // globalMemory.conversation items: { time: "HH:MM:SS", msg: "kat : hello" }
@@ -241,13 +265,13 @@ client.on("messageCreate", async (message) => {
 
     // Only respond to messages that start with ?t or messages from other users in DM
     let raw = String(message.content || "");
-    //const isFromSelf = message.author?.id === client.user?.id;
+    const isFromSelf = message.author?.id === client.user?.id;
 
     // If message is from self, only proceed when it starts with "?t "
-    //if (isFromSelf && !startsWithIgnoreCase(raw, "?t ")) return;
+    if (isFromSelf && !startsWithIgnoreCase(raw, "?t ")) return;
 
     // Remove ?t prefix if present
-    //if (startsWithIgnoreCase(raw, "?t ")) raw = raw.slice(3).trim();
+    if (startsWithIgnoreCase(raw, "?t ")) raw = raw.slice(3).trim();
 
     // sanity checks
     if (!raw && message.attachments.size === 0) return;
@@ -361,5 +385,4 @@ client.on("messageCreate", async (message) => {
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
-
 
