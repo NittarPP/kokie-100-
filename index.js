@@ -7,7 +7,7 @@ import keep_alive from './keep_alive.js' // optional; ignore if not used
 // -------------- CONFIG --------------
 const ai = new GoogleGenAI({ apiKey: process.env.GENAI_API_KEY });
 const client = new Client({ intents: 0 }); // selfbot minimal
-let MODEL = "gemini-2.0-flash-lite";
+let MODEL = "gemini-2.5-flash-lite";
 let stop = false;
 let dead = false;
 let lastsend = "Kokie_Cx and Ov15";
@@ -65,7 +65,7 @@ function timestamp() {
 }
 
 function addToGlobalMemory(userId, name, message) {
-  const line = `${userId} ${name} : ${message}`;
+  const line = `[${userId}] [${name}] : ${message}`;
   globalMemory.conversation.push({ time: timestamp(), msg: line });
   while (globalMemory.conversation.length > MAX_GLOBAL_MESSAGES) globalMemory.conversation.shift();
 }
@@ -75,7 +75,7 @@ function addToUserMemory(userId, name, message) {
     userMemory.set(userId, { conversation: [], lastReply: "" });
   }
   const mem = userMemory.get(userId);
-  const line = `${name} : ${message}`;
+  const line = `[${userId}] [${name}] : ${message}`;
   mem.conversation.push({ time: timestamp(), msg: line });
   while (mem.conversation.length > MAX_USER_MESSAGES) mem.conversation.shift();
 }
@@ -193,7 +193,7 @@ async function askGeminiCombined(userId, userMessageRaw, username, attachments =
       `\n\n--- USER MEMORY ---\n` +
       (userContext || "(no user memory)") +
       `\n--- END MEMORY ---\n` +
-      `Respond as Kokie. Keep messages short and human-like. Do NOT include extra metadata or "says:".`;
+      `Keep messages short and human-like. Do NOT include extra metadata`;
 
     // Call Gemini
     const response = await ai.models.generateContent({
