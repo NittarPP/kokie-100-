@@ -65,8 +65,8 @@ const globalMemory = {
 
 const userMemory = new Map(); // Map<userId, { conversation: [{time,msg}], lastReply }>
 
-const MAX_GLOBAL_MESSAGES = 50;
-const MAX_USER_MESSAGES = 30;
+const MAX_GLOBAL_MESSAGES = 30;
+const MAX_USER_MESSAGES = 20;
 
 // -------------- HELPERS --------------
 function timestamp() {
@@ -414,3 +414,4 @@ client.on("messageCreate", async (message) => {
 client.login(process.env.DISCORD_USER_TOKEN).catch(err => {
   console.error("Failed to login. Check DISCORD_USER_TOKEN:", err);
 });
+
